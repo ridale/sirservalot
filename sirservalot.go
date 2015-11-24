@@ -5,10 +5,14 @@ import (
 	"io"
 	"log"
 	"net"
+	"errors"
 )
 
 import "os"
 import "syscall"
+
+// #include <termios.h>
+// #include <unistd.h>
 import "C"
 
 /**
@@ -26,7 +30,8 @@ func openSerial() (io.ReadWriteCloser, error) {
 
 	fd := C.int(file.Fd())
 	if C.isatty(fd) == 0 {
-		return nil, errors.New("File is not a serial port")
+		err := errors.New("File is not a serial port")
+		return nil, err
 	}
 
 	var termios C.struct_termios

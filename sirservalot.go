@@ -75,7 +75,7 @@ func handleSerial(port io.ReadWriteCloser, chin chan string, chout chan string) 
 		for {
 			if scanner.Scan() {
 				fmt.Println(scanner.Text())
-				ch <- scanner.Text()
+				ch <- fmt.Sprintln(scanner.Text())
 			}
 			if err := scanner.Err(); err != nil {
 				fmt.Println(err)
@@ -96,7 +96,7 @@ func handleConnection(conn net.Conn, chin chan string, chout chan string) {
 		for {
 			if scanner.Scan() {
 				fmt.Println(scanner.Text())
-				ch <- scanner.Text()
+				ch <- fmt.Sprintln(scanner.Text())
 			}
 			if err := scanner.Err(); err != nil {
 				fmt.Println(err)

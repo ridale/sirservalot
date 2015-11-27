@@ -16,10 +16,6 @@ import "syscall"
 // #include <unistd.h>
 import "C"
 
-// global list of channels that the serial port
-// iterates to write to everyone
-var clients []chan string
-
 /**
  * Open the serial port setting the baud etc.
  */
@@ -61,36 +57,35 @@ func openSerial() (io.ReadWriteCloser, error) {
 /**
  * Main serial handling function
  */
-func handleSerial(port io.ReadWriteCloser, chin chan string) {
-	// The write thread
-	go func(port io.ReadWriteCloser, ch chan string) {
-		for {
-			_, err := io.WriteString(port, <-ch)
-			if err != nil {
-				fmt.Println(err)
-				break
-			}
-		}
-		port.Close()
-	}(port, chin)
-	// The read thread
-	go func(port io.ReadWriteCloser) {
-		scanner := bufio.NewScanner(port)
-		for {
-			if scanner.Scan() {
-				fmt.Println(scanner.Text())
-				s := fmt.Sprintln(scanner.Text())
-				for i := range clients {
-					clients[i] <- s
+func serialReader(port io.ReadWriteCloser, serin chan string) {
+	/*
+		// The write thread
+		go func(port io.ReadWriteCloser, ch chan string) {
+			for {
+				s := <-ch
+				_, err := io.WriteString(port, s)
+				if err != nil {
+					fmt.Println(err)
+					break
 				}
 			}
-			if err := scanner.Err(); err != nil {
-				fmt.Println(err)
-				break
-			}
+			port.Close()
+		}(port, chin)
+	*/
+	// The read thread
+	scanner := bufio.NewScanner(port)
+	for {
+		if scanner.Scan() {
+			s := fmt.Sprintln(scanner.Text())
+			fmt.Print(s)
+			serin <- s
 		}
-		port.Close()
-	}(port)
+		if err := scanner.Err(); err != nil {
+			fmt.Println(err)
+			break
+		}
+	}
+	port.Close()
 }
 
 /**
@@ -126,20 +121,39 @@ func handleConnection(conn net.Conn, chin chan string, chout chan string) {
 }
 
 /**
+ * Due to vagaries of chan we need to add to each client queue
+ *
+ */
+func fanOut(serin chan string, clients []chan string, reset chan struct{}) {
+	var str string
+Loop:
+	for {
+		select {
+		case str = <-serin:
+			for i := range clients {
+				clients[i] <- str
+			}
+		case <-reset:
+			break Loop
+		}
+	}
+}
+
+/**
  * Main() - Program entry function
  */
 func main() {
-	// make the comms channel object
-	// only the sreial port reads this, but everyone can write to it
-	chin := make(chan string, 0)
-	clients := make([]chan string, 0, 10)
+	serout := make(chan string, 0) // serial write channel
+	serin := make(chan string, 0)  // serial read channel
+	done := make(chan struct{}, 0) // finish signal channel
+	clients := make([]chan string, 1, 15)
+
 	// open the serial port
 	port, err := openSerial()
 	if err != nil {
 		log.Fatal(err)
 	}
-	// listen to the serial port
-	handleSerial(port, chin)
+	serialReader(port, serin)
 	// listen on 1812 for connections
 	ln, err := net.Listen("tcp", ":1812")
 	if err != nil {
@@ -148,16 +162,20 @@ func main() {
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
-		// maximum 10 clients
-		if len(clients) >= 10 {
-			conn.Close()
-		}
 		if err != nil {
 			log.Fatal(err)
 		}
+		// maximum 10 clients
+		if len(clients) >= 10 {
+			conn.Close()
+			continue
+		}
 		chout := make(chan string, 0)
-		clients = append(clients, chout)
-		go handleConnection(conn, chin, chout)
+		clients := append(clients, chout)
+		for _ = range clients {
+			done <- struct{}{}
+		}
+		go fanOut(serin, clients, done)
+		go handleConnection(conn, serout, chout)
 	}
-	close(chin)
 }

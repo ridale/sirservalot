@@ -78,8 +78,7 @@ func serialReader(port io.ReadWriteCloser, serin chan string) {
  */
 func handleConnection(conn net.Conn, port io.ReadWriteCloser, chout chan string) {
 	// the read from net
-	go func(c net.Conn, ch chan string) {
-		scanner := bufio.NewScanner(conn)
+	go func(c net.Conn, port io.ReadWriteCloser) {
 		for {
 			_, err := io.Copy(port, conn)
 			if err != nil {
@@ -125,7 +124,6 @@ Loop:
  * Main() - Program entry function
  */
 func main() {
-	serout := make(chan string, 0) // serial write channel
 	serin := make(chan string, 0)  // serial read channel
 	done := make(chan struct{}, 0) // finish signal channel
 	clients := make([]chan string, 0)

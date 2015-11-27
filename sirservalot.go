@@ -58,21 +58,6 @@ func openSerial() (io.ReadWriteCloser, error) {
  * Main serial handling function
  */
 func serialReader(port io.ReadWriteCloser, serin chan string) {
-	/*
-		// The write thread
-		go func(port io.ReadWriteCloser, ch chan string) {
-			for {
-				s := <-ch
-				_, err := io.WriteString(port, s)
-				if err != nil {
-					fmt.Println(err)
-					break
-				}
-			}
-			port.Close()
-		}(port, chin)
-	*/
-	// The read thread
 	scanner := bufio.NewScanner(port)
 	for {
 		if scanner.Scan() {
@@ -91,23 +76,20 @@ func serialReader(port io.ReadWriteCloser, serin chan string) {
 /**
  * Main TCP handling function
  */
-func handleConnection(conn net.Conn, chin chan string, chout chan string) {
-	// the read thread
+func handleConnection(conn net.Conn, port io.ReadWriteCloser, chout chan string) {
+	// the read from net
 	go func(c net.Conn, ch chan string) {
 		scanner := bufio.NewScanner(conn)
 		for {
-			if scanner.Scan() {
-				fmt.Println(scanner.Text())
-				ch <- fmt.Sprintln(scanner.Text())
-			}
-			if err := scanner.Err(); err != nil {
+			_, err := io.Copy(port, conn)
+			if err != nil {
 				fmt.Println(err)
 				break
 			}
 		}
 		conn.Close()
-	}(conn, chin)
-	// the write thread
+	}(conn, port)
+	// the write to net
 	go func(c net.Conn, ch chan string) {
 		for {
 			_, err := io.WriteString(conn, <-ch)
@@ -146,14 +128,14 @@ func main() {
 	serout := make(chan string, 0) // serial write channel
 	serin := make(chan string, 0)  // serial read channel
 	done := make(chan struct{}, 0) // finish signal channel
-	clients := make([]chan string, 1, 15)
-
+	clients := make([]chan string, 0)
+	go fanOut(serin, clients, done)
 	// open the serial port
 	port, err := openSerial()
 	if err != nil {
 		log.Fatal(err)
 	}
-	serialReader(port, serin)
+	go serialReader(port, serin)
 	// listen on 1812 for connections
 	ln, err := net.Listen("tcp", ":1812")
 	if err != nil {
@@ -171,11 +153,9 @@ func main() {
 			continue
 		}
 		chout := make(chan string, 0)
-		clients := append(clients, chout)
-		for _ = range clients {
-			done <- struct{}{}
-		}
+		clients = append(clients, chout)
+		done <- struct{}{}
 		go fanOut(serin, clients, done)
-		go handleConnection(conn, serout, chout)
+		go handleConnection(conn, port, chout)
 	}
 }

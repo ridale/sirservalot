@@ -2,11 +2,11 @@ package main
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
-	"errors"
-	"fmt"
 )
 
 import "os"
@@ -15,6 +15,10 @@ import "syscall"
 // #include <termios.h>
 // #include <unistd.h>
 import "C"
+
+// global list of channels that the serial port
+// iterates to write to everyone
+var clients []chan string
 
 /**
  * Open the serial port setting the baud etc.
@@ -57,7 +61,7 @@ func openSerial() (io.ReadWriteCloser, error) {
 /**
  * Main serial handling function
  */
-func handleSerial(port io.ReadWriteCloser, chin chan string, chout chan string) {
+func handleSerial(port io.ReadWriteCloser, chin chan string) {
 	// The write thread
 	go func(port io.ReadWriteCloser, ch chan string) {
 		for {
@@ -70,12 +74,15 @@ func handleSerial(port io.ReadWriteCloser, chin chan string, chout chan string) 
 		port.Close()
 	}(port, chin)
 	// The read thread
-	go func(port io.ReadWriteCloser, ch chan string) {
+	go func(port io.ReadWriteCloser) {
 		scanner := bufio.NewScanner(port)
 		for {
 			if scanner.Scan() {
 				fmt.Println(scanner.Text())
-				ch <- fmt.Sprintln(scanner.Text())
+				s := fmt.Sprintln(scanner.Text())
+				for i := range clients {
+					clients[i] <- s
+				}
 			}
 			if err := scanner.Err(); err != nil {
 				fmt.Println(err)
@@ -83,7 +90,7 @@ func handleSerial(port io.ReadWriteCloser, chin chan string, chout chan string) 
 			}
 		}
 		port.Close()
-	}(port, chout)
+	}(port)
 }
 
 /**
@@ -123,15 +130,16 @@ func handleConnection(conn net.Conn, chin chan string, chout chan string) {
  */
 func main() {
 	// make the comms channel object
+	// only the sreial port reads this, but everyone can write to it
 	chin := make(chan string, 0)
-	chout := make(chan string, 0)
+	clients := make([]chan string, 0, 10)
 	// open the serial port
 	port, err := openSerial()
 	if err != nil {
 		log.Fatal(err)
 	}
 	// listen to the serial port
-	handleSerial(port, chin, chout)
+	handleSerial(port, chin)
 	// listen on 1812 for connections
 	ln, err := net.Listen("tcp", ":1812")
 	if err != nil {
@@ -140,11 +148,16 @@ func main() {
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
+		// maximum 10 clients
+		if len(clients) >= 10 {
+			conn.Close()
+		}
 		if err != nil {
 			log.Fatal(err)
 		}
+		chout := make(chan string, 0)
+		clients = append(clients, chout)
 		go handleConnection(conn, chin, chout)
 	}
 	close(chin)
-	close(chout)
 }
